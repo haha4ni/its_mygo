@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"database/sql"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -9,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	_ "modernc.org/sqlite"
 )
 
 // 判斷是否為圖片檔案
@@ -34,7 +37,13 @@ func extractNumber(s string) int {
 	return num
 }
 
-func listImagesInZip(zipPath string) map[int]string {
+type ImageEntry struct {
+	Filename string
+	ImgIndex int
+	Page     int
+}
+
+func processZip(zipPath string) []ImageEntry {
 	// 打開 ZIP 檔案
 	reader, err := zip.OpenReader(zipPath)
 	if err != nil {
@@ -42,43 +51,74 @@ func listImagesInZip(zipPath string) map[int]string {
 	}
 	defer reader.Close()
 
-	var imageFiles []string
+	var images []ImageEntry
 
-	// 遍歷 ZIP 內的所有檔案
-	for _, file := range reader.File {
+	// 遍歷 ZIP 內的所有檔案，記錄原始順序
+	for page, file := range reader.File {
 		if !file.FileInfo().IsDir() && isImageFile(file.Name) {
-			imageFiles = append(imageFiles, file.Name)
+			images = append(images, ImageEntry{Filename: file.Name, ImgIndex: page})
 		}
 	}
 
-	// 進行自然排序
-	sort.Slice(imageFiles, func(i, j int) bool {
-		return extractNumber(imageFiles[i]) < extractNumber(imageFiles[j])
+	// 依據數字部分排序，設定 Page
+	sortedImages := make([]ImageEntry, len(images))
+	copy(sortedImages, images)
+	sort.Slice(sortedImages, func(i, j int) bool {
+		return extractNumber(sortedImages[i].Filename) < extractNumber(sortedImages[j].Filename)
 	})
 
-	// 建立索引對應表
-	imageIndexMap := make(map[int]string)
-	for i, name := range imageFiles {
-		imageIndexMap[i] = name
+	for page, entry := range sortedImages {
+		for i := range images {
+			if images[i].Filename == entry.Filename {
+				images[i].Page = page
+				break
+			}
+		}
 	}
 
-	return imageIndexMap
+	return images
+}
+
+func storeInDatabase(dbPath string, images []ImageEntry) {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		log.Fatalf("無法打開資料庫: %v", err)
+	}
+	defer db.Close()
+
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS images (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		filename TEXT,
+		img_index INTEGER,
+		page INTEGER
+	)`) 
+	if err != nil {
+		log.Fatalf("建立資料表失敗: %v", err)
+	}
+
+	stmt, err := db.Prepare("INSERT INTO images (filename, img_index, page) VALUES (?, ?, ?)")
+	if err != nil {
+		log.Fatalf("準備 SQL 語句失敗: %v", err)
+	}
+	defer stmt.Close()
+
+	for _, img := range images {
+		_, err := stmt.Exec(img.Filename, img.ImgIndex, img.Page)
+		if err != nil {
+			log.Printf("插入數據失敗: %v", err)
+		}
+	}
 }
 
 func main() {
 	zipPath := "example.zip" // 替換為你的 ZIP 檔案路徑
-	imageIndexMap := listImagesInZip(zipPath)
+	dbPath := "images.db"     // SQLite 資料庫路徑
+
+	images := processZip(zipPath)
+	storeInDatabase(dbPath, images)
 
 	fmt.Println("圖片索引對應表:")
-	for index, name := range imageIndexMap {
-		fmt.Printf("%d -> %s\n", index, name)
-	}
-
-	// 測試查找某個索引位置的檔案
-	targetIndex := 10 // 目標索引
-	if name, exists := imageIndexMap[targetIndex]; exists {
-		fmt.Printf("索引 %d 對應的檔案: %s\n", targetIndex, name)
-	} else {
-		fmt.Printf("索引 %d 超出範圍\n", targetIndex)
+	for _, img := range images {
+		fmt.Printf("Filename: %s, ImgIndex: %d, Page: %d\n", img.Filename, img.ImgIndex, img.Page)
 	}
 }
