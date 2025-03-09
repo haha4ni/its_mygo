@@ -53,10 +53,13 @@ func StoreData(db *sql.DB, data []Storable) {
 	// 準備 SQL 語句
 	columns := []string{}
 	values := []string{}
+	// map for迴圈
 	for field := range fields {
 		columns = append(columns, field)
 		values = append(values, "?")
 	}
+	//example : 
+	// INSERT INTO zip_files (filename, sha, timestamp) VALUES (?, ?, ?)
 	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", tableName, strings.Join(columns, ", "), strings.Join(values, ", "))
 
 	stmt, err := db.Prepare(query)
@@ -76,4 +79,14 @@ func StoreData(db *sql.DB, data []Storable) {
 			log.Printf("插入數據失敗: %v", err)
 		}
 	}
+}
+
+// Check if a ZipFile with the same SHA-256 already exists
+func CheckZipFileExists(db *sql.DB, sha string) (int, error) {
+	var existingZipFileID int
+	err := db.QueryRow("SELECT id FROM zip_files WHERE sha = ?", sha).Scan(&existingZipFileID)
+	if err != nil && err != sql.ErrNoRows {
+		return 0, err
+	}
+	return existingZipFileID, nil
 }
