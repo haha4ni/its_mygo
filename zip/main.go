@@ -88,66 +88,6 @@ func processZip(zipPath string) []database.ImageData {
 	return images
 }
 
-func checkCacheExpiration(zipSHA string) bool {
-	// Implement logic to check if the cache is expired based on the SHA of the ZIP file
-	// Return true if cache is expired, otherwise false
-	return true // Placeholder
-}
-
-func generateThumbnails(images []database.ImageData) {
-	// Implement logic to generate thumbnails
-}
-
-func main() {
-	zipPath := "example.zip"
-	dbPath := "images.db"
-
-	images := processZip(zipPath)
-
-	db := database.InitDB(dbPath)
-	defer db.Close()
-
-	// Calculate SHA-256 hash of the ZIP file
-	zipSHA := calculateFileSHA(zipPath)
-
-	// Check if a ZipFile with the same SHA-256 already exists
-	existingZipFileID, err := database.CheckZipFileExists(db, zipSHA)
-	// if err != nil {
-	// 	log.Fatalf("無法查詢 ZipFile: %v", err)
-	// }
-	if existingZipFileID != 0 {
-		log.Printf("ZipFile with SHA-256 %s already exists with ID %d. Skipping insertion.", zipSHA, existingZipFileID)
-		displayData(db, zipSHA, filepath.Base(zipPath))
-		return
-	}
-
-	// Create ZipFile struct
-	zipFile := database.ZipFile{
-		FileName:  filepath.Base(zipPath),
-		SHA:       zipSHA,
-		Timestamp: time.Now().Unix(),
-	}
-
-	// 轉成通用切片存入DB
-	data := []database.Storable{zipFile}
-	database.StoreData(db, data)
-
-	// Get the ID of the inserted ZipFile
-	var zipFileID int
-	err = db.QueryRow("SELECT id FROM zip_files WHERE filename = ? AND sha = ?", zipFile.FileName, zipFile.SHA).Scan(&zipFileID)
-	if err != nil {
-		log.Fatalf("無法獲取 ZipFile ID: %v", err)
-	}
-
-	// Store ImageData entries
-	for _, img := range images {
-		img.ZipID = zipFileID
-		database.StoreData(db, []database.Storable{img})
-	}
-
-	displayData(db, zipFile.SHA, zipFile.FileName)
-}
-
 func displayData(db *sql.DB, sha string, filename string) {
 	// Read and display data from the database
 	rows, err := db.Query("SELECT filename, sha, timestamp FROM zip_files WHERE sha = ? AND filename = ?", sha, filename)
@@ -187,4 +127,55 @@ func displayData(db *sql.DB, sha string, filename string) {
 		fmt.Printf("| %-32s | %-8d | %-4d |\n", filename, imgIndex, page)
 	}
 	fmt.Println("-------------------------------------------------")
+}
+
+func handleZipFile(zipPath string) {
+	dbPath := "images.db"
+	images := processZip(zipPath)
+
+	db := database.InitDB(dbPath)
+	defer db.Close()
+
+	// Calculate SHA-256 hash of the ZIP file
+	zipSHA := calculateFileSHA(zipPath)
+
+	// Check if a ZipFile with the same SHA-256 already exists
+	existingZipFileID, err := database.CheckZipFileExists(db, zipSHA)
+	if err != nil {
+		log.Printf("無法查詢 ZipFile: %v", err)
+	}
+	if existingZipFileID == 0 {
+		fmt.Printf("無資料開始寫入\n")
+		// Create ZipFile struct
+		zipFile := database.ZipFile{
+			FileName:  filepath.Base(zipPath),
+			SHA:       zipSHA,
+			Timestamp: time.Now().Unix(),
+		}
+
+		// 轉成通用切片存入DB
+		database.StoreData(db, []database.Storable{zipFile})
+
+		// Get the ID of the inserted ZipFile
+		var zipFileID int
+		err = db.QueryRow("SELECT id FROM zip_files WHERE filename = ? AND sha = ?", zipFile.FileName, zipFile.SHA).Scan(&zipFileID)
+		if err != nil {
+			log.Fatalf("無法獲取 ZipFile ID: %v", err)
+		}
+
+		// Store ImageData entries
+		for _, img := range images {
+			img.ZipID = zipFileID
+			database.StoreData(db, []database.Storable{img})
+		}
+	} else if existingZipFileID != 0 {
+		log.Printf("ZipFile with SHA-256 %s already exists with ID %d. Skipping insertion.", zipSHA, existingZipFileID)
+	}
+	displayData(db, zipSHA, filepath.Base(zipPath))
+}
+
+func main() {
+	zipPath := "example.zip"
+	
+	handleZipFile(zipPath)
 }
